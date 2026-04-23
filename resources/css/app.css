@@ -797,7 +797,7 @@ textarea {
 
 .offer-meta-item strong {
     font-size: 15px;
-    color: #0f172a;
+    color: var(--text);
 }
 
 .offer-notes {

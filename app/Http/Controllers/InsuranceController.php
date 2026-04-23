@@ -2,14 +2,17 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\InsuranceRequest;
-use App\Models\Vehicle;
-use App\Models\Individual;
 use App\Models\Company;
+use App\Models\Individual;
+use App\Models\InsuranceRequest;
 use App\Models\Offer;
+use App\Models\Vehicle;
 use App\Services\LifeIsHardService;
+use Carbon\Carbon;
+use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 
 class InsuranceController extends Controller
 {
@@ -22,8 +25,19 @@ class InsuranceController extends Controller
 
     public function createOffer(Request $request)
     {
+        if (app()->environment('local')) {
+            set_time_limit(120);
+        }
+
         return DB::transaction(function () use ($request) {
             $data = $request->all();
+
+            // Force tomorrow in RO timezone so midnight/UTC issues do not break the request
+            data_set(
+                $data,
+                'product.motor.startDate',
+                Carbon::now('Europe/Bucharest')->addDay()->format('Y-m-d')
+            );
 
             $taxId = $request->input('product.policyholder.taxId');
             if ($taxId) {
@@ -82,20 +96,20 @@ class InsuranceController extends Controller
             }
 
             $person = $policyholderEntity->person()->updateOrCreate(
-                ['email' => $ph['email']],
-                ['phone' => $ph['mobileNumber']]
+                ['email' => $ph['email'] ?? 'no-email@example.com'],
+                ['phone' => $ph['mobileNumber'] ?? null]
             );
 
-            $addr = $ph['address'];
+            $addr = $ph['address'] ?? [];
             $person->address()->updateOrCreate(
                 ['person_id' => $person->id],
                 [
                     'country' => $addr['country'] ?? 'RO',
-                    'county' => $addr['county'],
-                    'city' => $addr['city'],
-                    'city_code' => $addr['cityCode'],
-                    'street' => $addr['street'],
-                    'house_number' => $addr['houseNumber'],
+                    'county' => $addr['county'] ?? null,
+                    'city' => $addr['city'] ?? null,
+                    'city_code' => $addr['cityCode'] ?? null,
+                    'street' => $addr['street'] ?? null,
+                    'house_number' => $addr['houseNumber'] ?? null,
                     'building' => $addr['building'] ?? null,
                     'staircase' => $addr['staircase'] ?? null,
                     'apartment' => $addr['apartment'] ?? null,
@@ -124,62 +138,107 @@ class InsuranceController extends Controller
             }
 
             $targetProvider = $request->input('provider.organization.businessName');
-            $providers = ['asirom', 'grawe', 'axeria', 'hellas_autonom', 'eazy_insure'];
 
+            // Keep only the stable providers
+            $providers = [
+                'asirom',
+                'grawe',
+                'axeria',
+                'hellas_autonom',
+                'eazy_insure',
+            ];
+
+            // For PJ, Eazy usually asks for an adult driver, so remove it from "all"
             $isLegalEntity = !empty(data_get($data, 'product.policyholder.businessName'));
-
             if ($isLegalEntity) {
-                $providers = array_values(array_filter($providers, fn ($p) => $p !== 'eazy_insure'));
+                $providers = array_values(array_filter(
+                    $providers,
+                    fn ($provider) => $provider !== 'eazy_insure'
+                ));
             }
 
             if ($targetProvider !== 'all') {
                 $providers = [$targetProvider];
             }
 
+            $responses = Http::pool(function (Pool $pool) use ($providers, $data, $token) {
+                $requests = [];
+
+                foreach ($providers as $name) {
+                    $currentPayload = $data;
+                    $currentPayload['provider']['organization']['businessName'] = $name;
+
+                    $request = $pool->as($name)
+                        ->withHeaders([
+                            'Token' => $token,
+                            'Accept' => 'application/json',
+                        ])
+                        ->connectTimeout(8)
+                        ->timeout(20);
+
+                    if (app()->environment('local')) {
+                        $request = $request->withOptions(['verify' => false]);
+                    }
+
+                    $requests[] = $request->post(
+                        'https://rca-qa.api.lifeishard.ro/offer',
+                        $currentPayload
+                    );
+                }
+
+                return $requests;
+            });
+
             $finalOffers = [];
 
             foreach ($providers as $name) {
-                $currentPayload = $data;
-                $currentPayload['provider']['organization']['businessName'] = $name;
+                $response = $responses[$name] ?? null;
 
-                $resData = $this->lihService->requestOffer($currentPayload, $token);
+                if ($response instanceof \Illuminate\Http\Client\Response && $response->successful()) {
+                    $resData = $response->json();
 
-                if (
-                    is_array($resData) &&
-                    isset($resData['data']['offers'][0])
-                ) {
-                    $lihOffer = $resData['data']['offers'][0];
+                    if (isset($resData['data']['offers'][0])) {
+                        $lihOffer = $resData['data']['offers'][0];
 
-                    $localOffer = Offer::create([
-                        'insurance_request_id' => $insuranceRequest->id,
-                        'insurer_name' => $name,
-                        'price' => $lihOffer['premiumAmount'],
-                        'external_id' => $lihOffer['offerId'],
-                        'raw_data' => $resData,
-                        'status' => 'pending'
-                    ]);
+                        $localOffer = Offer::create([
+                            'insurance_request_id' => $insuranceRequest->id,
+                            'insurer_name' => $name,
+                            'price' => $lihOffer['premiumAmount'],
+                            'external_id' => $lihOffer['offerId'],
+                            'raw_data' => $resData,
+                            'status' => 'pending',
+                        ]);
 
-                    $finalOffers[] = [
-                        'id' => $localOffer->id,
-                        'insurer' => $name,
-                        'price' => $localOffer->price,
-                        'details' => $lihOffer,
-                        'success' => true
-                    ];
+                        $finalOffers[] = [
+                            'id' => $localOffer->id,
+                            'insurer' => $name,
+                            'price' => $localOffer->price,
+                            'details' => $lihOffer,
+                            'success' => true,
+                        ];
+                    } else {
+                        $finalOffers[] = [
+                            'insurer' => $name,
+                            'success' => false,
+                            'error' => 'Nu s-au găsit oferte în răspuns.',
+                        ];
+                    }
                 } else {
                     $errorMessage = 'Server indisponibil sau timeout (QA)';
 
-                    if (is_array($resData)) {
+                    if ($response instanceof \Illuminate\Http\Client\Response) {
+                        $resData = $response->json();
+
                         $errorMessage =
                             $resData['message'] ??
                             $resData['error'] ??
-                            'Nu s-au găsit oferte în răspuns.';
+                            'Eroare validare date API';
                     }
 
                     $finalOffers[] = [
                         'insurer' => $name,
                         'success' => false,
-                        'error' => $errorMessage
+                        'error' => $errorMessage,
                     ];
                 }
             }
@@ -194,8 +253,8 @@ class InsuranceController extends Controller
             });
 
             return response()->json([
-                'success' => count(array_filter($finalOffers, fn($o) => $o['success'])) > 0,
-                'offers' => $finalOffers
+                'success' => count(array_filter($finalOffers, fn ($o) => $o['success'])) > 0,
+                'offers' => $finalOffers,
             ]);
         });
     }
