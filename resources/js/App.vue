@@ -1,18 +1,23 @@
 <template>
     <div class="app-shell">
         <header class="topbar">
-            <div>
-                <h1>Generator oferte RCA</h1>
-                <p>Demo ofertare asigurări</p>
-            </div>
+            <div class="topbar-inner">
+                <div class="brand">
+                    <div class="brand-badge">RCA</div>
+                    <div>
+                        <h1 class="brand-title">Comparator RCA</h1>
+                        <p class="brand-subtitle">Ofertare rapidă pentru persoane fizice și juridice</p>
+                    </div>
+                </div>
 
-            <nav class="nav">
-                <RouterLink to="/" class="nav-link">Calculare nouă</RouterLink>
-                <RouterLink to="/history" class="nav-link">Istoric cereri</RouterLink>
-            </nav>
+                <nav class="nav">
+                    <RouterLink to="/" class="nav-link">Ofertare</RouterLink>
+                    <RouterLink to="/history" class="nav-link">Istoric</RouterLink>
+                </nav>
+            </div>
         </header>
 
-        <main class="page-container">
+        <main class="page">
             <RouterView />
         </main>
     </div>

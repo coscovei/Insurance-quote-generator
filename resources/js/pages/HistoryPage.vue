@@ -72,9 +72,6 @@
                     >
                         <span class="offer-chip-name">{{ offer.insurer_name }}</span>
                         <span class="offer-chip-price">{{ offer.price }} RON</span>
-                        <span class="offer-chip-status" :class="offer.status">
-                            {{ formatStatus(offer.status) }}
-                        </span>
 
                         <a
                             v-if="offer.pdf_url"
@@ -142,12 +139,7 @@ function getBestOffer(req) {
     return sortedOffers(req.offers)[0]
 }
 
-function formatStatus(status) {
-    if (!status) return '-'
-    if (status === 'paid') return 'Plătită'
-    if (status === 'pending') return 'În așteptare'
-    return status
-}
+
 
 function formatDate(value) {
     if (!value) return '-'
