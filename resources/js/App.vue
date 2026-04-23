@@ -10,10 +10,14 @@
                     </div>
                 </div>
 
-                <nav class="nav">
+                <div class="nav">
                     <RouterLink to="/" class="nav-link">Ofertare</RouterLink>
                     <RouterLink to="/history" class="nav-link">Istoric</RouterLink>
-                </nav>
+
+                    <button class="theme-toggle" @click="toggleTheme">
+                        {{ isDark ? 'Light' : 'Dark' }}
+                    </button>
+                </div>
             </div>
         </header>
 
@@ -24,4 +28,23 @@
 </template>
 
 <script setup>
+import { onMounted, ref, watch } from 'vue'
+
+const isDark = ref(false)
+
+onMounted(() => {
+    isDark.value = localStorage.getItem('theme') === 'dark'
+    document.body.classList.toggle('dark', isDark.value)
+    document.documentElement.classList.toggle('dark', isDark.value)
+})
+
+watch(isDark, (value) => {
+    document.body.classList.toggle('dark', value)
+    document.documentElement.classList.toggle('dark', value)
+    localStorage.setItem('theme', value ? 'dark' : 'light')
+})
+
+function toggleTheme() {
+    isDark.value = !isDark.value
+}
 </script>
